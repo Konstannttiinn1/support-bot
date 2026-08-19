@@ -20,7 +20,12 @@ from app.bot.utils.language import resolve_language_code
 from app.bot.utils.redis import RedisStorage, SettingsStorage, QuickReplyStorage, QuickReplyItem, QuickReplyAttachment
 from app.bot.utils.redis.models import UserData
 from app.bot.utils.reminders import cancel_support_reminder, schedule_support_reminder
-from app.bot.utils.remnawave import fetch_user_info, format_user_info, is_configured
+from app.bot.utils.remnawave import (
+    RemnawaveLookupError,
+    fetch_user_info,
+    format_user_info,
+    is_configured,
+)
 from app.bot.utils.security import sanitize_display_name
 from app.bot.utils.texts import TextMessage
 
@@ -214,7 +219,13 @@ async def handler(message: Message, manager: Manager, redis: RedisStorage) -> No
     user_data = await redis.get_by_message_thread_id(message.message_thread_id)
     if not user_data: return None  # noqa
 
-    info = await fetch_user_info(manager.config.remnawave, user_data.id)
+    try:
+        info = await fetch_user_info(manager.config.remnawave, user_data.id)
+    except RemnawaveLookupError:
+        await message.reply(
+            "Не удалось получить данные из Remnawave. Проверьте доступность панели и логи бота."
+        )
+        return
     if info:
         await message.reply(format_user_info(info, title="Remnawave: информация о пользователе"))
         return
@@ -543,7 +554,14 @@ async def panel_callback(
         await call.answer()
         return
     elif action == "info":
-        info = await fetch_user_info(manager.config.remnawave, user_data.id)
+        try:
+            info = await fetch_user_info(manager.config.remnawave, user_data.id)
+        except RemnawaveLookupError:
+            await call.message.answer(
+                "Не удалось получить данные из Remnawave. Проверьте доступность панели и логи бота."
+            )
+            await call.answer()
+            return
         if info:
             await call.message.answer(format_user_info(info, title="Remnawave: информация о пользователе"))
             await call.answer()
@@ -598,7 +616,11 @@ async def quick_reply_send(
         if not is_configured(manager.config.remnawave):
             await call.answer("Remnawave не настроен.", show_alert=True)
             return
-        info = await fetch_user_info(manager.config.remnawave, user_data.id)
+        try:
+            info = await fetch_user_info(manager.config.remnawave, user_data.id)
+        except RemnawaveLookupError:
+            await call.answer("Ошибка Remnawave API. Проверьте логи бота.", show_alert=True)
+            return
         subscription_url = info.subscription_url if info else None
         if not subscription_url:
             await call.answer("Подписная ссылка не найдена.", show_alert=True)
