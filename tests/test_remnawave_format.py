@@ -15,6 +15,7 @@ def test_format_user_info_contains_emojis_and_escapes():
         status="ACTIVE",
         user_id=42,
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        first_connected_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         expire_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         used_traffic_bytes=1024 ** 3,
         lifetime_traffic_bytes=2 * 1024 ** 3,
@@ -41,6 +42,8 @@ def test_format_user_info_contains_emojis_and_escapes():
     assert "📱" in text
     assert "📱" in text
     assert "https://example.com/sub" in text
+    assert "Создан: 2025-01-01 03:00:00" in text
+    assert "Первое подключение: 2025-01-02 03:00:00" in text
     assert "Вид подписки" in text
     assert "ПЛАТНАЯ" in text or "НИЩЕБРОД" in text or "&lt;alpha&gt;" in text
 
@@ -52,6 +55,7 @@ def test_format_user_info_includes_daily_traffic_stats():
         status="ACTIVE",
         user_id=42,
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        first_connected_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         expire_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         used_traffic_bytes=1024 ** 3,
         lifetime_traffic_bytes=2 * 1024 ** 3,
@@ -111,6 +115,7 @@ def test_format_user_info_includes_zero_daily_traffic():
         status="ACTIVE",
         user_id=42,
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        first_connected_at=None,
         expire_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         used_traffic_bytes=0,
         lifetime_traffic_bytes=0,
