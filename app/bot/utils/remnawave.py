@@ -38,6 +38,7 @@ class RemnawaveInfo:
     status: str
     user_id: int | None
     created_at: datetime
+    first_connected_at: datetime | None
     expire_at: datetime
     used_traffic_bytes: float
     lifetime_traffic_bytes: float
@@ -51,6 +52,10 @@ class RemnawaveInfo:
     devices_limit: int | None = None
     devices_names: list[str] | None = None
     daily_traffic: DailyTrafficStats | None = None
+
+
+class RemnawaveLookupError(RuntimeError):
+    """Raised when Remnawave cannot complete a configured user lookup."""
 
 
 def _bytes_to_gb(value: float | int | None) -> str:
@@ -185,18 +190,18 @@ def _extract_daily_traffic_stats(stats: object, *, date_label: str) -> DailyTraf
     )
 
 
-async def _fetch_daily_traffic_stats(sdk: RemnawaveSDK, user_uuid: object) -> DailyTrafficStats | None:
+async def _fetch_daily_traffic_stats(sdk: RemnawaveSDK, user_id: int) -> DailyTrafficStats | None:
     today = datetime.now(MSK).date()
     date_label = today.isoformat()
     try:
         stats = await sdk.bandwidthstats.get_stats_user_usage(
-            str(user_uuid),
+            user_id,
             top_nodes_limit=DAILY_TRAFFIC_NODES_LIMIT,
             start=date_label,
             end=date_label,
         )
     except Exception as exc:
-        logger.warning("Failed to load daily traffic stats for %s: %s", user_uuid, exc)
+        logger.warning("Failed to load daily traffic stats for user_id=%s: %s", user_id, exc)
         return None
 
     return _extract_daily_traffic_stats(stats, date_label=date_label)
@@ -213,20 +218,18 @@ async def fetch_user_info(config: RemnawaveConfig, telegram_id: int) -> Remnawav
         ssl_ignore=config.SSL_IGNORE,
     )
     try:
-        users = await sdk.users.get_users_by_telegram_id(str(telegram_id))
+        page = await sdk.users.get_users_stream(
+            size=1000,
+            telegram_id=str(telegram_id),
+        )
+        users = list(page.users)
         if not users:
             return None
 
         user = users[0]
         users_found = len(users)
 
-        user_id = getattr(user, "id", None)
-        if user_id is None:
-            user_id = getattr(user, "user_id", None)
-        if user_id is None:
-            extra = getattr(user, "__pydantic_extra__", None) or getattr(user, "model_extra", None)
-            if isinstance(extra, dict):
-                user_id = extra.get("id") or extra.get("userId")
+        user_id = int(user.id)
 
         last_node_name: Optional[str] = None
         last_connected_at = user.user_traffic.online_at
@@ -255,9 +258,9 @@ async def fetch_user_info(config: RemnawaveConfig, telegram_id: int) -> Remnawav
         devices_count: Optional[int] = None
         devices_limit: Optional[int] = getattr(user, "hwid_device_limit", None)
         devices_names: list[str] = []
-        if getattr(user, "uuid", None):
+        if user_id is not None:
             try:
-                devices = await sdk.hwid.get_hwid_user(str(user.uuid))
+                devices = await sdk.hwid.get_hwid_user(user_id)
                 devices_count = getattr(devices, "total", None)
                 for device in getattr(devices, "devices", []) or []:
                     parts = []
@@ -279,11 +282,9 @@ async def fetch_user_info(config: RemnawaveConfig, telegram_id: int) -> Remnawav
                         )
                     devices_names.append(html.escape(str(label)))
             except Exception as exc:
-                logger.warning("Failed to load HWID devices for %s: %s", user.uuid, exc)
+                logger.warning("Failed to load HWID devices for user_id=%s: %s", user_id, exc)
 
-        daily_traffic = None
-        if getattr(user, "uuid", None):
-            daily_traffic = await _fetch_daily_traffic_stats(sdk, user.uuid)
+        daily_traffic = await _fetch_daily_traffic_stats(sdk, user_id)
 
         return RemnawaveInfo(
             username=user.username,
@@ -291,6 +292,7 @@ async def fetch_user_info(config: RemnawaveConfig, telegram_id: int) -> Remnawav
             status=str(user.status),
             user_id=user_id,
             created_at=user.created_at,
+            first_connected_at=user.user_traffic.first_connected_at,
             expire_at=user.expire_at,
             used_traffic_bytes=user.user_traffic.used_traffic_bytes,
             lifetime_traffic_bytes=user.user_traffic.lifetime_used_traffic_bytes,
@@ -307,7 +309,9 @@ async def fetch_user_info(config: RemnawaveConfig, telegram_id: int) -> Remnawav
         )
     except Exception as exc:
         logger.exception("Remnawave lookup failed for telegram_id=%s: %s", telegram_id, exc)
-        return None
+        raise RemnawaveLookupError(
+            f"Remnawave lookup failed for telegram_id={telegram_id}"
+        ) from exc
     finally:
         await sdk._client.aclose()
 
@@ -336,7 +340,8 @@ def format_user_info(info: RemnawaveInfo, *, title: str) -> str:
         f"🔢 ID пользователя: {hcode(info.user_id) if info.user_id else '—'}",
         f"🆔 Telegram ID: {hcode(info.telegram_id) if info.telegram_id else '—'}",
         f"✅ Статус: {hcode(info.status)}",
-        f"🗓 Первое подключение: {_format_datetime(info.created_at)}",
+        f"🗓 Создан: {_format_datetime(info.created_at)}",
+        f"🔌 Первое подключение: {_format_datetime(info.first_connected_at)}",
         f"🗓 Подписка активна до: {_format_datetime(info.expire_at)}",
         f"📶 Трафик за месяц: {_bytes_to_gb(info.used_traffic_bytes)}",
         f"📶 Трафик за всё время: {_bytes_to_gb(info.lifetime_traffic_bytes)}",
